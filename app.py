@@ -512,9 +512,7 @@ elif page == "⚙️ 系统设置":
 # ── 页脚 ──────────────────────────────────────────────────
 st.sidebar.markdown("---")
 st.sidebar.markdown(
-    "<small>宁波大学计算机系\n\n"
-    "《计算机系统综合实习》课程设计\n\n"
-    "基于 YOLO26-Pose + LLM + RAG\n\n"
-    "© 2026 王兴伽</small>",
+    "<small>基于 YOLO-Pose + LLM + RAG\n\n"
+    "康复训练姿态评估系统</small>",
     unsafe_allow_html=True,
 )
