@@ -1,0 +1,174 @@
+# ══════════════════════════════════════════════════════════════
+# 康复训练姿态评估系统 - Docker Compose (Mac / 通用)
+# ══════════════════════════════════════════════════════════════
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 查看日志: docker compose logs -f [service_name]
+# ══════════════════════════════════════════════════════════════
+
+services:
+  # ── 基础设施 ──────────────────────────────────────────────
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: rehab-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zk-data:/var/lib/zookeeper/data
+      - zk-logs:/var/lib/zookeeper/log
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: rehab-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 2
+      KAFKA_MESSAGE_MAX_BYTES: 10485760  # 10MB (视频帧较大)
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+  # ── PostgreSQL 数据库 ─────────────────────────────────────
+
+  postgres:
+    image: postgres:15-bookworm
+    hostname: postgres
+    container_name: rehab-postgres
+    environment:
+      POSTGRES_DB: rehab
+      POSTGRES_USER: rehab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rehab123}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+  # ── 视频采集服务 ──────────────────────────────────────────
+
+  video-capture:
+    build:
+      context: .
+      dockerfile: docker/video-capture/Dockerfile
+    container_name: rehab-video-capture
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CAMERA_SOURCE: ${CAMERA_SOURCE:-0}
+      CAPTURE_FPS: ${CAPTURE_FPS:-15}
+    # Mac 上摄像头挂载方式（取消注释启用）:
+    # devices:
+    #   - /dev/video0:/dev/video0
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+  # ── YOLO 推理服务 (GPU 加速) ─────────────────────────────
+
+  yolo-inference:
+    build:
+      context: .
+      dockerfile: docker/yolo-inference/Dockerfile
+    container_name: rehab-yolo-inference
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      YOLO_MODEL: /app/models/yolo11n-pose.pt
+    volumes:
+      - ./yolo11n-pose.pt:/app/models/yolo11n-pose.pt:ro
+    # Mac 无 NVIDIA GPU，YOLO 使用 CPU 推理
+    # runtime: nvidia  # Jetson GPU 直通（取消注释启用）
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+  # ── 姿态对比服务 ──────────────────────────────────────────
+
+  compare-service:
+    build:
+      context: .
+      dockerfile: docker/compare-service/Dockerfile
+    container_name: rehab-compare-service
+    depends_on:
+      - kafka
+      - postgres
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATABASE_URL: postgresql://rehab:${POSTGRES_PASSWORD:-rehab123}@postgres:5432/rehab
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+  # ── AI 评估服务 ───────────────────────────────────────────
+
+  ai-evaluator:
+    build:
+      context: .
+      dockerfile: docker/ai-evaluator/Dockerfile
+    container_name: rehab-ai-evaluator
+    depends_on:
+      - kafka
+      - postgres
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATABASE_URL: postgresql://rehab:${POSTGRES_PASSWORD:-rehab123}@postgres:5432/rehab
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+  # ── Web 前端 ──────────────────────────────────────────────
+
+  web-app:
+    build:
+      context: .
+      dockerfile: docker/web-app/Dockerfile
+    container_name: rehab-web-app
+    depends_on:
+      - kafka
+      - postgres
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATABASE_URL: postgresql://rehab:${POSTGRES_PASSWORD:-rehab123}@postgres:5432/rehab
+    ports:
+      - "8501:8501"
+    networks:
+      - rehab-net
+    restart: unless-stopped
+
+# ── 网络 ────────────────────────────────────────────────────
+
+networks:
+  rehab-net:
+    driver: bridge
+
+# ── 数据卷 ──────────────────────────────────────────────────
+
+volumes:
+  zk-data:
+  zk-logs:
+  kafka-data:
+  pg-data:
