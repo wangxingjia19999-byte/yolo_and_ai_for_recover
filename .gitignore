@@ -1,0 +1,14 @@
+# Model files
+*.pth
+*.pt
+*.bin
+*.h5
+*.onnx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data
+data/
